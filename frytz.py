@@ -1,25 +1,27 @@
 #!/usr/bin/env python
 """fritz box api calls for python"""
 import requests
-import md5
+import hashlib
 import xml.etree.ElementTree as ET
 import re
 import logging
+logger = logging.getLogger(__name__)
 
-
-PASSWORD = 'secret Password'
-
+USERNAME = 'YOUR FRITZ USERNAME HERE'
+PASSWORD = 'YOUR SECRET PASSWORD HERE'
+DOMAIN = 'YOUR FRITZ IP/HOSTNAME HERE'
 
 class Frytz(object):
     """class for interaction with the FRITZ!Box(R)"""
 
-    def __init__(self, domain='fritz.box', password=''):
+    def __init__(self, domain='fritz.box', password='', username=''):
         self.domain = 'http://' + domain
-        self.base = '{}/cgi-bin/webcm'.format(self.domain)
-        self.post_base = "getpage=../html/de/menus/menu2.html&var:lang=de"
+        self.base = '{}/fon_num/fonbook_list.lua'.format(self.domain)
         self.headers = {'content-type': "application/x-www-form-urlencoded"}
+        self.username = username
         self.password = password
         self.sid = self._get_sid()
+        logging.basicConfig(level=logging.INFO)
 
     def _get_sid(self):
         """
@@ -33,12 +35,13 @@ class Frytz(object):
         tree = ET.fromstring(response.content)
         for one in tree.findall('Challenge'):
             challenge = one.text
-        md5sum = md5.new((challenge + "-" + self.password).encode('utf-16LE'))
+        md5sum = hashlib.md5((challenge + "-" + self.password).encode('utf-16LE'))
         md5sum = md5sum.hexdigest()
+
         fresponse = challenge + '-' + md5sum
         #parameter = "&login:command/response={}".format(fresponse)
         response = requests.get(
-            '{}/login_sid.lua?username=&response={}'.format(self.domain, fresponse),
+            '{}/login_sid.lua?username={}&response={}'.format(self.domain, self.username, fresponse),
             headers=self.headers
         )
         # we are looking for something like this:
@@ -47,10 +50,11 @@ class Frytz(object):
         if match:
             sid = match.groups()[0]
         else:
-            logging.error('could not get sid')
-            logging.error('response was:')
-            logging.error(response.content)
+            logger.error('could not get sid')
+            logger.error('response was:')
+            logger.error(response.content)
             raise Exception('could not get sid')
+        logger.debug('SID:', sid)
         return sid
 
     def dial(self, number):
@@ -59,41 +63,18 @@ class Frytz(object):
         pick up the default phone
         """
         url = self.base
-        data = ('{post_base}&sid={sid}&telcfg:settings/UseClickToDial=1&'
-                'telcfg:command/Dial={number}')
-        data = data.format(post_base=self.post_base, number=number, sid=self.sid)
+        data = ('{post_base}&sid={sid}&dial={number}')
+        data = data.format(post_base=self.base, number=number, sid=self.sid)
         response = requests.post(url, data=data, headers=self.headers)
-        if response.text != u'':
-            logging.error(response.text)
-
-    def get_wanip(self):
-        """getting the external IP of the FritzBox"""
-        # XXX does not work
-        service_type = 'urn:schemas-upnp-org:service:WANIPConnection:1'
-        name = 'GetStatusInfo'
-        headers = {'soapaction': '',
-                   'content-type': 'text/xml',
-                   'charset': 'utf-8',
-                   }
-        template = """
-            <?xml version="1.0" encoding="utf-8"?>
-            <s:Envelope s:encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"
-                        xmlns:s="http://schemas.xmlsoap.org/soap/envelope/">
-            <s:Body>
-            <u:{service_type} xmlns:u="{name}" />
-            </s:Body>
-            </s:Envelope>
-            """
-        headers['soapaction'] = '%s#%s' % (service_type, name)
-        data = template.format(name=name, service_type=service_type)
-        response = requests.post(self.domain, data=data, headers=headers)
-        return response
-
+        if response.status_code != 200:
+            logger.error(response.text)
+        else:
+            logger.info(response.text)
 
 if __name__ == '__main__':
     import sys
-    frytz = Frytz(password=PASSWORD)
-    if sys.argv[1].startswith('-'):
+    if len(sys.argv) == 1:
         print('usage: frytz.py +492219876543')
     else:
+        frytz = Frytz(password=PASSWORD, username=USERNAME, domain=DOMAIN)
         frytz.dial(sys.argv[1])
